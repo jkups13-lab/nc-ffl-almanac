@@ -306,6 +306,17 @@ footer{
 @media (max-width:640px){
   .topbar-inner{flex-direction:column; align-items:flex-start;}
   .grid-2{grid-template-columns:1fr;}
+
+  /* Standings (and any other data-heavy table) shouldn't force the whole page to scroll
+     sideways — let the table itself scroll, and trim it down to what fits on a phone. */
+  .table-scroll-card{padding:14px 0 14px 14px; overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .table-scroll-card table{min-width:520px;}
+  .standings-table th, .standings-table td{padding:8px 8px; font-size:12.5px; white-space:nowrap;}
+  .standings-table .rank-badge{width:20px; height:20px; font-size:10px;}
+}
+
+@media (max-width:460px){
+  .table-scroll-card table{min-width:0;}
 }
 
 </style>
@@ -372,8 +383,8 @@ footer{
     <!-- Standings panel -->
     <div class="season-panel active" data-panel="standings">
       <div class="methodology-note">Ranks 1–6 reflect actual championship bracket results. Ranks below that are ordered by regular-season record — this league doesn't play out the consolation bracket for placement.</div>
-      <div class="card">
-        <table id="standingsTable">
+      <div class="card table-scroll-card">
+        <table id="standingsTable" class="standings-table">
           <thead><tr><th>Rank</th><th>Team</th><th>Manager</th><th class="num">Record</th><th class="num">Points For</th><th class="num">Points Against</th></tr></thead>
           <tbody></tbody>
         </table>
@@ -737,23 +748,46 @@ function renderPlayoffs(y){
   const champBracket = s.playoffs.filter(p=>p.bracketType==='Championship');
   const consBracket = s.playoffs.filter(p=>p.bracketType!=='Championship');
 
-  function buildCols(games){
+function buildCols(games){
+    // Games are grouped by a numeric `round`, but the final round of each bracket packs multiple
+    // distinct matches (Championship/3rd Place/5th Place, or 7th/9th/11th) into that same round
+    // number. Group by round first, then split each round into its distinct labeled matches so
+    // every game lands in its own correctly-titled column.
     const byRound = {};
     games.forEach(g=>{ (byRound[g.round]=byRound[g.round]||[]).push(g); });
     const roundNums = Object.keys(byRound).map(Number).sort((a,b)=>a-b);
-    return roundNums.map(rn=>{
+    const emptyLabelRounds = roundNums.filter(rn=>byRound[rn].every(g=>!g.roundLabel));
+
+    const priority = {'Championship':0,'Fantasy Super Bowl':0,'3rd Place Game':1,'5th Place Game':2,
+                       '7th Place Game':1,'9th Place Game':2,'11th Place Game':3};
+
+    const cols = [];
+    roundNums.forEach(rn=>{
       const gs = byRound[rn];
-      const label = gs[0].roundLabel;
-      const matches = gs.map(g=>{
+      const byLabel = {};
+      gs.forEach(g=>{ const key = g.roundLabel || ''; (byLabel[key]=byLabel[key]||[]).push(g); });
+      const labelKeys = Object.keys(byLabel).sort((a,b)=>(priority[a]??-1)-(priority[b]??-1));
+      labelKeys.forEach(key=>{
+        let display = key;
+        if(!key){
+          // Name the unlabeled early rounds by counting backward from the final round
+          const posFromEnd = emptyLabelRounds.length - emptyLabelRounds.indexOf(rn) - 1;
+          display = posFromEnd===0 ? 'Semifinal' : (posFromEnd===1 ? 'Quarterfinal' : `Round ${emptyLabelRounds.indexOf(rn)+1}`);
+        }
+        cols.push({label:display, games:byLabel[key]});
+      });
+    });
+
+    return cols.map(col=>{
+      const matches = col.games.map(g=>{
         const t1 = teamName(y,g.team1Id), t2 = teamName(y,g.team2Id);
-        const bye = g.team2Id==null || g.team2Points==null;
         const w1 = g.winner===g.team1Id, w2 = g.winner===g.team2Id;
         return `<div class="bmatch">
           <div class="brow ${w1?'winner':''}"><span>(${g.team1Seed}) ${t1}</span><span class="bscore">${g.team1Points!=null?g.team1Points.toFixed(1):'BYE'}</span></div>
           ${g.team2Id?`<div class="brow ${w2?'winner':''}"><span>(${g.team2Seed}) ${t2}</span><span class="bscore">${g.team2Points!=null?g.team2Points.toFixed(1):'BYE'}</span></div>`:''}
         </div>`;
       }).join('');
-      return `<div class="bracket-col"><h4>${label}</h4>${matches}</div>`;
+      return `<div class="bracket-col"><h4>${col.label}</h4>${matches}</div>`;
     }).join('');
   }
 
@@ -795,10 +829,11 @@ $('#draftSearch').addEventListener('input', ()=>renderDraft(currentSeason));
 function renderFranchises(){
   const grid = $('#franchiseGrid');
   const arr = Object.values(franchises).sort((a,b)=> (b.championships.length-a.championships.length) || (b.wins-a.wins));
-  grid.innerHTML = arr.map(f=>{
+  grid.innerHTML = arr.map((f,i)=>{
     const pct = (f.wins/(f.wins+f.losses+f.ties)*100).toFixed(1);
     const trophies = f.championships.map(()=>'🏆').join('');
     return `<div class="franchise-card" data-tid="${f.teamId}">
+      <div class="rank-badge ${i===0?'gold':''}" style="margin-bottom:10px;">${i+1}</div>
       <h4>${f.displayName}</h4>
       <div class="mgr">${f.managerName}</div>
       <div class="rec">${f.wins}-${f.losses}${f.ties?('-'+f.ties):''}</div>
